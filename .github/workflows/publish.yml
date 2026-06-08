@@ -5,9 +5,11 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# OIDC token for npm Trusted Publishing (no NPM_TOKEN secret needed). It also
+# attaches build provenance automatically.
 permissions:
   contents: read
-  id-token: write # required for npm provenance
+  id-token: write
 
 jobs:
   publish:
@@ -19,6 +21,8 @@ jobs:
           node-version: 20
           registry-url: https://registry.npmjs.org
           cache: npm
+      # Trusted Publishing requires npm >= 11.5.1 (Node 20 ships npm 10.x).
+      - run: npm install -g npm@latest
       - run: npm ci
       - run: npm test
       # On a tag push, make sure the tag matches the package version.
@@ -31,8 +35,6 @@ jobs:
             echo "::error::tag v$TAG does not match package.json version $PKG"
             exit 1
           fi
-      # `prepublishOnly` builds the dist; --provenance attaches a signed
-      # build attestation (public repo + id-token make this possible).
-      - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Auth comes from the OIDC trust configured on npmjs.com for this repo +
+      # workflow; `prepublishOnly` builds the dist and provenance is automatic.
+      - run: npm publish
