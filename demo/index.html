@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>bcd — boustrophedon cellular decomposition</title>
+    <style>
+      :root {
+        --bg: #0f1117;
+        --panel: #181b24;
+        --line: #2a2f3d;
+        --text: #e6e8ee;
+        --muted: #9aa3b2;
+        --accent: #5db1ff;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        display: flex;
+        height: 100vh;
+        overflow: hidden;
+      }
+      aside {
+        width: 320px;
+        flex: 0 0 320px;
+        background: var(--panel);
+        border-right: 1px solid var(--line);
+        padding: 20px;
+        overflow-y: auto;
+      }
+      main { flex: 1; position: relative; min-width: 0; }
+      canvas { display: block; width: 100%; height: 100%; }
+      h1 { font-size: 18px; margin: 0 0 2px; }
+      .sub { color: var(--muted); font-size: 12px; margin-bottom: 20px; }
+      .sub code { color: var(--accent); }
+      label.field { display: block; margin: 0 0 6px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+      .group { margin-bottom: 22px; }
+      select, input[type="range"] { width: 100%; }
+      select {
+        background: #11141c; color: var(--text); border: 1px solid var(--line);
+        border-radius: 8px; padding: 8px 10px; font-size: 14px;
+      }
+      .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+      .angle-val { font-variant-numeric: tabular-nums; color: var(--text); font-size: 13px; }
+      .toggle { display: flex; align-items: center; gap: 9px; padding: 7px 0; cursor: pointer; color: var(--text); }
+      .toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
+      .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+      .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin-top: 6px; }
+      .stat { background: #11141c; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+      .stat b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+      .stat span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+      footer { color: var(--muted); font-size: 11px; margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+      footer a { color: var(--accent); text-decoration: none; }
+      .err { color: #ff7a7a; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <aside>
+      <h1>bcd</h1>
+      <div class="sub">Boustrophedon cellular decomposition · <code>decompose(polygon, angle)</code></div>
+
+      <div class="group">
+        <label class="field" for="polygon">Polygon</label>
+        <select id="polygon"></select>
+      </div>
+
+      <div class="group">
+        <div class="row">
+          <label class="field" for="angle" style="margin:0">Sweep angle</label>
+          <span class="angle-val" id="angle-val">0°</span>
+        </div>
+        <input id="angle" type="range" min="0" max="180" step="1" value="0" />
+      </div>
+
+      <div class="group">
+        <label class="field">Visualize</label>
+        <label class="toggle"><input type="checkbox" id="show-faces" checked /><span class="swatch" style="background:linear-gradient(45deg,#5db1ff,#b15dff)"></span> Faces (cells)</label>
+        <label class="toggle"><input type="checkbox" id="show-graph" /><span class="swatch" style="background:#ffd166"></span> Connectivity graph</label>
+        <label class="toggle"><input type="checkbox" id="show-outline" checked /><span class="swatch" style="background:#e6e8ee"></span> Original outline</label>
+        <label class="toggle"><input type="checkbox" id="show-sweep" /><span class="swatch" style="background:#3a4255"></span> Sweep lines</label>
+      </div>
+
+      <div class="group">
+        <label class="field">Result</label>
+        <div class="stats">
+          <div class="stat"><b id="n-faces">–</b><span>Faces</span></div>
+          <div class="stat"><b id="n-verts">–</b><span>Vertices</span></div>
+          <div class="stat"><b id="n-edges">–</b><span>Graph edges</span></div>
+          <div class="stat"><b id="n-time">–</b><span>Decompose</span></div>
+        </div>
+        <div class="err" id="err"></div>
+      </div>
+
+      <footer>
+        Polygons from the
+        <a href="https://github.com/LingDong-/interesting-polygon-archive" target="_blank" rel="noopener">Interesting Polygon Archive</a>
+        by LingDong-. Drag the slider to rotate the sweep direction.
+      </footer>
+    </aside>
+
+    <main><canvas id="view"></canvas></main>
+
+    <script type="module" src="./demo.js"></script>
+  </body>
+</html>
