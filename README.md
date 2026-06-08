@@ -1,5 +1,8 @@
 # bcd
 
+[![CI](https://github.com/matthewjacobson/bcd/actions/workflows/ci.yml/badge.svg)](https://github.com/matthewjacobson/bcd/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@matthewjacobson/bcd)](https://www.npmjs.com/package/@matthewjacobson/bcd)
+
 Boustrophedon cellular decomposition of a 2D polygon (with or without holes)
 along an arbitrary sweep angle.
 
