@@ -170,6 +170,49 @@ covered by tests, including a fully axis-aligned grid of holes at `angle = 0`.
   edges are kept in a balanced AVL status tree, so each event does `O(log n)`
   work. ~25k vertices decomposes in well under 100 ms.
 
+## Releasing
+
+Releases are automated. Pushing a `vX.Y.Z` tag triggers the
+[publish workflow](./.github/workflows/publish.yml), which runs the tests and
+then publishes to npm via [Trusted Publishing](https://docs.npmjs.com/trusted-publishers)
+(OIDC — **no token needed**) with build provenance attached.
+
+To cut a release:
+
+```sh
+# 1. Bump the version (this edits package.json and updates the lockfile).
+#    Use "patch", "minor", or "major" — or an explicit version like 0.2.0.
+npm version patch --no-git-tag-version
+
+# 2. Commit the bump and push to main (CI runs typecheck + tests).
+git add package.json package-lock.json
+git commit -m "Release v$(node -p "require('./package.json').version")"
+git push origin main
+
+# 3. Tag the release and push the tag — this kicks off the publish workflow.
+git tag "v$(node -p "require('./package.json').version")"
+git push origin --tags
+```
+
+Then watch it and confirm it landed:
+
+```sh
+gh run watch                          # follow the "Publish to npm" run
+npm view @matthewjacobson/bcd version # should show the new version
+```
+
+Optionally add release notes: `gh release create vX.Y.Z --title vX.Y.Z --notes "..."`.
+
+Notes:
+
+- The tag **must** match the `version` in `package.json`, or the publish step
+  fails on purpose (a guard against mismatched releases).
+- The npm trusted publisher (repo `matthewjacobson/bcd`, workflow `publish.yml`)
+  is already configured, so no `NPM_TOKEN` secret is involved.
+- `npm version` without `--no-git-tag-version` would also create the tag for
+  you, but it tags *before* the push to main; the steps above keep the commit
+  and tag ordering explicit.
+
 ## License
 
 MIT
