@@ -32,9 +32,12 @@ const rect = (x0, y0, x1, y1) => [
 /**
  * Hand-built shapes that exercise multiple critical points landing on the same
  * sweep line. Watch the "Faces"/"Graph edges" stats jump as you move the slider
- * off the degenerate angle: at the degenerate angle the aligned holes share a
- * band (fewer cells), just off it you get the generic-position decomposition.
- * Either way the graph stays connected — that's the edge case handled.
+ * off a degenerate angle: when critical points align on one sweep line the holes
+ * share a band (fewer cells), just off it you get the generic-position
+ * decomposition. Each shape's name flags its most obvious degenerate angle, but
+ * a regular layout can be degenerate at several — e.g. the 4×4 grid coincides at
+ * 0° *and* 45° (the rotated corners realign). Either way the graph stays
+ * connected and reports only real adjacencies — that's the edge case handled.
  */
 function buildDemoPolygons() {
   const demos = {};

@@ -27,8 +27,18 @@ interface Cell {
 const FLOOR = 0;
 const CEIL = 1;
 
+/**
+ * A directed adjacency between two cells, tagged with the y-interval `[lo, hi]`
+ * (rotated frame, at the shared cut's x) over which they actually touch. The
+ * interval lets us contract dropped pass-through cells correctly: two surviving
+ * cells are adjacent only if their seam intervals overlap along the whole path.
+ */
+type AdjPair = [from: number, to: number, lo: number, hi: number];
+
 /** Faces whose absolute area is below this threshold are discarded as slivers. */
 const AREA_EPS = 1e-9;
+/** Shared seams shorter than this (rotated-frame length) are treated as a touch, not an edge. */
+const SEAM_EPS = 1e-7;
 /** Coordinate rounding used when merging coincident vertices. */
 const ROUND = 1e9;
 
@@ -134,7 +144,9 @@ export function decompose(polygon: Polygon, angle: number): DecompositionResult 
   // Active edges indexed by the vertex they end at (their right endpoint).
   const endsAt: Edge[][] = Array.from({ length: N }, () => []);
   const rawFaces: Array<{ uid: number; pts: Point[] }> = [];
-  const adjPairs: Array<[number, number]> = []; // directed left-cell -> right-cell uid pairs
+  // Directed left-cell -> right-cell uid pairs, each tagged with the y-interval
+  // (in the rotated frame, at the shared cut's x) over which the two cells touch.
+  const adjPairs: Array<AdjPair> = [];
   let uid = 0;
 
   const addEdge = (e: Edge): void => {
@@ -202,7 +214,9 @@ export function decompose(polygon: Polygon, angle: number): DecompositionResult 
         const high = makeCell(uid++, highFloor, c.ceil, [point(v)], [{ x, y: yc }]);
         addEdge(lowCeil);
         addEdge(highFloor);
-        adjPairs.push([c.uid, low.uid], [c.uid, high.uid]);
+        // c spans [yf, yc]; the split point vy[v] divides it: the lower cell
+        // shares [yf, vy[v]] with c, the upper cell shares [vy[v], yc].
+        adjPairs.push([c.uid, low.uid, yf, vy[v]], [c.uid, high.uid, vy[v], yc]);
       }
     } else if (pLeft && nLeft) {
       // Both neighbours to the left: END (convex) or MERGE (reflex).
@@ -237,7 +251,9 @@ export function decompose(polygon: Polygon, angle: number): DecompositionResult 
           status.remove(floorEnding);
           // low.floor and high.ceil stay in the tree, now bounding the merge.
           const merged = makeCell(uid++, low.floor, high.ceil, [{ x, y: yf }], [{ x, y: yc }]);
-          adjPairs.push([low.uid, merged.uid], [high.uid, merged.uid]);
+          // merged spans [yf, yc]; the merge point vy[v] divides it: the lower
+          // cell shares [yf, vy[v]] with merged, the upper cell [vy[v], yc].
+          adjPairs.push([low.uid, merged.uid, yf, vy[v]], [high.uid, merged.uid, vy[v], yc]);
         }
       }
     } else {
@@ -291,7 +307,7 @@ function dedupRing(pts: Point[]): Point[] {
  */
 function assemble(
   rawFaces: Array<{ uid: number; pts: Point[] }>,
-  adjPairs: Array<[number, number]>,
+  adjPairs: Array<AdjPair>,
   cos: number,
   sin: number,
 ): DecompositionResult {
@@ -322,17 +338,21 @@ function assemble(
   );
 
   // Build the adjacency graph. `adjPairs` are directed left-cell -> right-cell
-  // (the left cell is always created first, so its uid is smaller). When several
-  // critical points share a sweep position, a cell can be born and consumed at
-  // the same x, producing a zero-area "pass-through" cell that the area filter
-  // drops. We must not lose the connections that ran through it, so dropped
-  // cells are contracted: each surviving cell is linked to the surviving cells
-  // reachable by walking forward through dropped cells only.
-  const outEdges = new Map<number, number[]>();
-  for (const [from, to] of adjPairs) {
-    const list = outEdges.get(from);
-    if (list) list.push(to);
-    else outEdges.set(from, [to]);
+  // (the left cell is always created first, so its uid is smaller), each tagged
+  // with the y-interval over which the two cells share a vertical cut. When
+  // several critical points share a sweep position, a cell can be born and
+  // consumed at the same x, producing a zero-area "pass-through" cell that the
+  // area filter drops. We must not lose the connections that ran through it, so
+  // dropped cells are contracted: each surviving cell links to the surviving
+  // cells reachable by walking forward through dropped cells only. Crucially the
+  // seam intervals are intersected along the path — a dropped cell is a vertical
+  // seam, and two cells on either side touch only where their seams overlap, so
+  // an upstream/downstream pair is linked iff that overlap has positive length.
+  const outEdges = new Map<number, AdjPair[]>();
+  for (const pair of adjPairs) {
+    const list = outEdges.get(pair[0]);
+    if (list) list.push(pair);
+    else outEdges.set(pair[0], [pair]);
   }
   const alive = (uid: number): boolean => uidToFace.has(uid);
 
@@ -352,14 +372,25 @@ function assemble(
   };
 
   for (const [uid, face] of uidToFace) {
-    const stack = [...(outEdges.get(uid) ?? [])];
-    const visited = new Set<number>();
+    // Each stack frame carries the cell to visit and the seam interval reaching
+    // it from `face` (intersected across every dropped cell already traversed).
+    const stack: Array<[number, number, number]> = (outEdges.get(uid) ?? []).map(
+      (p) => [p[1], p[2], p[3]],
+    );
+    const visited = new Set<string>();
     while (stack.length) {
-      const w = stack.pop() as number;
-      if (visited.has(w)) continue;
-      visited.add(w);
-      if (alive(w)) link(face, uidToFace.get(w) as number);
-      else for (const nxt of outEdges.get(w) ?? []) stack.push(nxt);
+      const [w, lo, hi] = stack.pop() as [number, number, number];
+      if (hi - lo <= SEAM_EPS) continue; // seam pinched to nothing along this path
+      const key = `${w}|${round(lo)}|${round(hi)}`;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      if (alive(w)) {
+        link(face, uidToFace.get(w) as number);
+      } else {
+        for (const p of outEdges.get(w) ?? []) {
+          stack.push([p[1], Math.max(lo, p[2]), Math.min(hi, p[3])]);
+        }
+      }
     }
   }
   for (const list of adjacency) list.sort((x, y) => x - y);

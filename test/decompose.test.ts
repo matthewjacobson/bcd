@@ -191,6 +191,53 @@ function connected(result: DecompositionResult): boolean {
   return seen.size === result.faces.length;
 }
 
+/**
+ * Geometric ground truth for adjacency: two faces are adjacent iff they share a
+ * boundary segment of positive length (in BCD every internal seam is such a
+ * shared segment). Independent of how the algorithm tracks connectivity, so it
+ * catches both phantom edges and missing ones.
+ */
+function geometricallyAdjacent(f1: Point[], f2: Point[]): boolean {
+  const cross = (o: Point, p: Point, q: Point): number =>
+    (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x);
+  const overlaps = (a: Point, b: Point, c: Point, d: Point): boolean => {
+    const len = Math.max(Math.hypot(b.x - a.x, b.y - a.y), 1);
+    if (Math.abs(cross(a, b, c)) > 1e-4 * len || Math.abs(cross(a, b, d)) > 1e-4 * len) return false;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const t = (p: Point): number => (Math.abs(dx) > Math.abs(dy) ? (p.x - a.x) / dx : (p.y - a.y) / dy);
+    const lo = Math.min(t(c), t(d));
+    const hi = Math.max(t(c), t(d));
+    return Math.min(1, hi) - Math.max(0, lo) > 1e-4;
+  };
+  for (let i = 0; i < f1.length; i++) {
+    const a = f1[i];
+    const b = f1[(i + 1) % f1.length];
+    for (let j = 0; j < f2.length; j++) {
+      const c = f2[j];
+      const d = f2[(j + 1) % f2.length];
+      if (overlaps(a, b, c, d)) return true;
+    }
+  }
+  return false;
+}
+
+/** The reported graph must match geometric adjacency exactly — no phantom or missing edges. */
+function assertGraphMatchesGeometry(result: DecompositionResult): void {
+  const rings = result.faces.map((_f, i) => faceRing(result, i));
+  const reported = new Set(result.graph.edges.map(([a, b]) => `${a}_${b}`));
+  for (const [a, b] of result.graph.edges) {
+    expect(geometricallyAdjacent(rings[a], rings[b])).toBe(true); // no phantom edges
+  }
+  for (let i = 0; i < rings.length; i++) {
+    for (let j = i + 1; j < rings.length; j++) {
+      if (geometricallyAdjacent(rings[i], rings[j])) {
+        expect(reported.has(`${i}_${j}`)).toBe(true); // no missing edges
+      }
+    }
+  }
+}
+
 describe("decompose – coincident critical points on one sweep line", () => {
   // Two holes whose left (and right) edges share an x-coordinate: at angle 0
   // both split events — and both merge events — land on the same sweep line.
@@ -240,5 +287,36 @@ describe("decompose – coincident critical points on one sweep line", () => {
     expect(totalArea(result)).toBeCloseTo(span * span - k * k, 4);
     expect(connected(result)).toBe(true);
     assertGraphConsistent(result);
+    assertGraphMatchesGeometry(result);
+  });
+
+  // Regression: a regular axis-aligned grid swept at 45° rotates every hole into
+  // a diamond, and the regular spacing makes those diamond corners coincide on
+  // shared sweep lines — so merge and split events pile onto the same x, creating
+  // zero-area pass-through cells. Contracting them used to cross-connect every
+  // upstream cell to every downstream cell, producing phantom graph edges between
+  // faces that don't actually touch. The seam-interval intersection fixes it.
+  it("does not produce phantom adjacencies on a grid swept at 45°", () => {
+    const rect = (x0: number, y0: number, x1: number, y1: number): Point[] =>
+      pts([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
+    const holes: Point[][] = [];
+    for (let i = 0; i < 4; i++) {
+      for (let j = 0; j < 4; j++) {
+        const x0 = 40 + 80 * i;
+        const y0 = 40 + 80 * j;
+        holes.push(rect(x0, y0, x0 + 40, y0 + 40));
+      }
+    }
+    const result = decompose({ outer: rect(0, 0, 340, 340), holes }, Math.PI / 4);
+    expect(totalArea(result)).toBeCloseTo(340 * 340 - 16 * 40 * 40, 3);
+    expect(connected(result)).toBe(true);
+    assertGraphConsistent(result);
+    assertGraphMatchesGeometry(result);
+  });
+
+  it("matches geometric adjacency across a sweep of angles", () => {
+    for (const angle of [0, 0.0001, 0.3, Math.PI / 4, Math.PI / 3, Math.PI / 2]) {
+      assertGraphMatchesGeometry(decompose(stackedHoles, angle));
+    }
   });
 });
