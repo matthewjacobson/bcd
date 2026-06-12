@@ -18,7 +18,9 @@ describing how the cells connect so you can plan an order to visit them.
 
 ## Demo
 
-An interactive demo lives in [`demo/`](./demo): pick a polygon from the
+**[▶ Try it live](https://matthewjacobson.github.io/bcd/)** — no install needed.
+
+The interactive demo (source in [`demo/`](./demo)) lets you pick a polygon from the
 [Interesting Polygon Archive](https://github.com/LingDong-/interesting-polygon-archive),
 drag the sweep-angle slider, and toggle visualization of the cells, the
 connectivity graph, the original outline and the sweep lines.
