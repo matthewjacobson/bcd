@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>bcd — boustrophedon cellular decomposition</title>
+    <title>bcd — DCEL explorer</title>
     <style>
       :root {
         --bg: #0f1117;
@@ -12,6 +12,7 @@
         --text: #e6e8ee;
         --muted: #9aa3b2;
         --accent: #5db1ff;
+        --twin: #ff9e64;
       }
       * { box-sizing: border-box; }
       html, body { height: 100%; margin: 0; }
@@ -24,15 +25,15 @@
         overflow: hidden;
       }
       aside {
-        width: 320px;
-        flex: 0 0 320px;
+        width: 340px;
+        flex: 0 0 340px;
         background: var(--panel);
         border-right: 1px solid var(--line);
         padding: 20px;
         overflow-y: auto;
       }
       main { flex: 1; position: relative; min-width: 0; }
-      canvas { display: block; width: 100%; height: 100%; }
+      canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
       h1 { font-size: 18px; margin: 0 0 2px; }
       .sub { color: var(--muted); font-size: 12px; margin-bottom: 20px; }
       .sub code { color: var(--accent); }
@@ -52,6 +53,14 @@
       .stat { background: #11141c; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
       .stat b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
       .stat span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+      #hover-info {
+        background: #11141c; border: 1px solid var(--line); border-radius: 8px;
+        padding: 10px 12px; font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+        min-height: 128px; white-space: pre-wrap; word-break: break-word;
+      }
+      #hover-info .k { color: var(--muted); }
+      #hover-info .a { color: var(--accent); }
+      #hover-info .t { color: var(--twin); }
       footer { color: var(--muted); font-size: 11px; margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
       footer a { color: var(--accent); text-decoration: none; }
       .err { color: #ff7a7a; font-size: 12px; }
@@ -59,8 +68,8 @@
   </head>
   <body>
     <aside>
-      <h1>bcd</h1>
-      <div class="sub">Boustrophedon cellular decomposition · <code>decompose(polygon, angle)</code></div>
+      <h1>bcd · DCEL explorer</h1>
+      <div class="sub">Doubly connected edge list · <code>decompose(polygon, angle, { dcel: true })</code></div>
 
       <div class="group">
         <label class="field" for="polygon">Polygon</label>
@@ -78,33 +87,40 @@
       <div class="group">
         <label class="field">Visualize</label>
         <label class="toggle"><input type="checkbox" id="show-faces" checked /><span class="swatch" style="background:linear-gradient(45deg,#5db1ff,#b15dff)"></span> Faces (cells)</label>
-        <label class="toggle"><input type="checkbox" id="show-graph" /><span class="swatch" style="background:#ffd166"></span> Connectivity graph</label>
-        <label class="toggle"><input type="checkbox" id="show-outline" checked /><span class="swatch" style="background:#e6e8ee"></span> Original outline</label>
-        <label class="toggle"><input type="checkbox" id="show-sweep" /><span class="swatch" style="background:#3a4255"></span> Sweep lines</label>
+        <label class="toggle"><input type="checkbox" id="show-cycles" checked /><span class="swatch" style="background:#ffd166"></span> Boundary cycles (face −1)</label>
+        <label class="toggle"><input type="checkbox" id="show-verts" checked /><span class="swatch" style="background:#e6e8ee"></span> DCEL vertices</label>
+      </div>
+
+      <div class="group">
+        <label class="field">Hover — face · edge · vertex</label>
+        <div id="hover-info"><span class="k">Move the pointer over the drawing.
+
+Hover a face to walk its half-edge cycle
+via next, an edge to see its twin pair,
+a vertex to orbit it via twin→next.</span></div>
       </div>
 
       <div class="group">
         <label class="field">Result</label>
         <div class="stats">
+          <div class="stat"><b id="n-he">–</b><span>Half-edges</span></div>
           <div class="stat"><b id="n-faces">–</b><span>Faces</span></div>
-          <div class="stat"><b id="n-verts">–</b><span>Vertices</span></div>
-          <div class="stat"><b id="n-edges">–</b><span>Graph edges</span></div>
-          <div class="stat"><b id="n-time">–</b><span>Decompose</span></div>
+          <div class="stat"><b id="n-cycles">–</b><span>Boundary cycles</span></div>
+          <div class="stat"><b id="n-euler">–</b><span>V − E + F</span></div>
         </div>
         <div class="err" id="err"></div>
       </div>
 
       <footer>
-        Polygons from the
-        <a href="https://github.com/LingDong-/interesting-polygon-archive" target="_blank" rel="noopener">Interesting Polygon Archive</a>
-        by LingDong-. Drag the slider to rotate the sweep direction.
-        Also try the <a href="./dcel.html">DCEL explorer</a> — hover faces,
-        edges and vertices to walk the half-edge structure.
+        Every undirected edge is two directed twins, each with its face on the
+        left. Try <b>plus (T-junctions)</b> at 0°: the seams that a single cell
+        carries as one edge are subdivided so each piece pairs exactly with its
+        neighbour. Back to the <a href="./index.html">main demo</a>.
       </footer>
     </aside>
 
     <main><canvas id="view"></canvas></main>
 
-    <script type="module" src="./demo.js"></script>
+    <script type="module" src="./dcel.js"></script>
   </body>
 </html>
