@@ -1,6 +1,6 @@
 {
   "name": "@matthewjacobson/bcd",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Boustrophedon cellular decomposition of polygons (with holes) along an arbitrary sweep angle.",
   "type": "module",
   "author": "Matthew Jacobson",
