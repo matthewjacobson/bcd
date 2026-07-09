@@ -14,7 +14,8 @@ describing how the cells connect so you can plan an order to visit them.
 - Single function, no runtime dependencies.
 - Handles concave polygons and holes.
 - Works at any sweep angle.
-- Ships ESM + CJS builds with TypeScript types.
+- Ships ESM + CJS builds with TypeScript types, plus a browser global build
+  for CDN `<script>` usage.
 
 ## Demo
 
@@ -63,6 +64,26 @@ dashed, and highlights are deep-linkable (e.g. `?hover=face:1`).
 ```sh
 npm install @matthewjacobson/bcd
 ```
+
+Or use it directly in a browser from a CDN — either as an ES module:
+
+```html
+<script type="module">
+  import { decompose } from "https://esm.sh/@matthewjacobson/bcd";
+</script>
+```
+
+or as a classic script that defines a `bcd` global:
+
+```html
+<script src="https://cdn.jsdelivr.net/npm/@matthewjacobson/bcd"></script>
+<script>
+  const result = bcd.decompose(polygon, angle);
+</script>
+```
+
+(unpkg works too: `https://unpkg.com/@matthewjacobson/bcd`. Pin a version in
+production, e.g. `@matthewjacobson/bcd@0.2.1`.)
 
 ## Usage
 
