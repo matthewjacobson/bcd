@@ -51,6 +51,13 @@ The grid shape (`edge · hole grid 4×4`) at `0°` is the worst case — every c
 of holes piles critical points onto one sweep line — and still decomposes into a
 fully connected graph.
 
+There is also a **[DCEL explorer](https://matthewjacobson.github.io/bcd/demo/dcel.html)**
+(`demo/dcel.html`) for the [DCEL output](#dcel-output): hover a face to walk its
+half-edge cycle via `next`, hover an edge to see the twin pair (each offset
+toward its own face), and hover a vertex to orbit it via `twin→next`. Boundary
+cycles of the unbounded face — the outer boundary plus one per hole — are drawn
+dashed, and highlights are deep-linkable (e.g. `?hover=face:1`).
+
 ## Install
 
 ```sh
@@ -90,12 +97,13 @@ result.graph.edges; // [number, number][] — undirected adjacency pairs, i < j
 
 ## API
 
-### `decompose(polygon, angle): DecompositionResult`
+### `decompose(polygon, angle, options?): DecompositionResult`
 
-| Parameter | Type        | Description                                                                                   |
-| --------- | ----------- | --------------------------------------------------------------------------------------------- |
-| `polygon` | `Polygon`   | `{ outer: Point[]; holes?: Point[][] }`. Rings may be given in any winding order.             |
-| `angle`   | `number`    | Sweep direction in radians, CCW from the `+x` axis. Cells are sliced perpendicular to it.     |
+| Parameter | Type               | Description                                                                                   |
+| --------- | ------------------ | --------------------------------------------------------------------------------------------- |
+| `polygon` | `Polygon`          | `{ outer: Point[]; holes?: Point[][] }`. Rings may be given in any winding order.             |
+| `angle`   | `number`           | Sweep direction in radians, CCW from the `+x` axis. Cells are sliced perpendicular to it.     |
+| `options` | `DecomposeOptions` | Optional. `{ dcel: true }` also builds a [doubly connected edge list](#dcel-output).          |
 
 ```ts
 interface Point {
@@ -119,13 +127,44 @@ interface DecompositionResult {
 ```
 
 Rings are re-oriented internally (outer counter-clockwise, holes clockwise) and
-do **not** need their first point repeated at the end. The first point being
-repeated is tolerated. Output faces are always counter-clockwise.
+do **not** need their first point repeated at the end. A repeated closing point
+and consecutive duplicate points are stripped before decomposing. Output faces
+are always counter-clockwise.
 
 Two faces are adjacent when they share a vertical cut produced at a **critical
 point** of the sweep — a *split* (one cell divides into two) or a *merge* (two
 cells fuse into one). START/END events open and close cells without creating
 adjacency, so a simple convex polygon yields a single face with an empty graph.
+
+### DCEL output
+
+Pass `{ dcel: true }` to also get a doubly connected edge list — a full
+topological description of the planar subdivision, useful when you need to walk
+seams, orbit vertices, or hand the decomposition to downstream geometry code:
+
+```ts
+const result = decompose(polygon, angle, { dcel: true });
+const dcel = result.dcel!;
+
+dcel.halfEdges; // { origin, twin, next, prev, face }[] — face -1 is the unbounded face
+dcel.faceEdge; // one half-edge index per face (its CCW cycle)
+dcel.vertexEdge; // one outgoing half-edge index per vertex
+dcel.boundaryCycles; // one half-edge per boundary cycle: outer boundary + one per hole
+```
+
+Every undirected edge is represented by two directed twins, each with its face
+on the left. Interior faces cycle counter-clockwise via `next`; edges on the
+polygon's boundary have a twin with `face === -1`, and those twins form one
+cycle around the outer boundary plus one around each hole (`boundaryCycles`).
+The orbit `h -> halfEdges[halfEdges[h].twin].next` walks the edges leaving a
+vertex.
+
+Raw boustrophedon cells do not share their cut edges exactly (a cell closed at
+a split carries the full cut as one edge, while its neighbours subdivide it at
+the event vertex), so with `dcel: true` the face loops are first *normalised*:
+T-junction vertices are inserted into the loops they are missing from. The
+faces are geometrically identical but may contain collinear vertices along
+shared cuts; `vertices` and `graph` are unchanged.
 
 ## How it works
 
@@ -161,11 +200,15 @@ covered by tests, including a fully axis-aligned grid of holes at `angle = 0`.
 ## Notes & limitations
 
 - Coordinates are exact (no perturbation). Zero-area cells (from coincident
-  critical points, see above) are dropped below an area threshold of `1e-9`, but
-  their adjacencies are preserved. Note that at an exactly degenerate angle the
-  cell *count* reflects the simultaneous interpretation (e.g. two aligned holes
-  give one shared band), whereas any other angle gives the generic-position
-  count; both are valid, area-conserving decompositions.
+  critical points, see above) are dropped below an area threshold relative to
+  the input's bounding box (`10⁻¹² · diagonal²`), but their adjacencies are
+  preserved. Note that at an exactly degenerate angle the cell *count* reflects
+  the simultaneous interpretation (e.g. two aligned holes give one shared band),
+  whereas any other angle gives the generic-position count; both are valid,
+  area-conserving decompositions.
+- The polygon is centred on its bounding box internally and all tolerances
+  scale with the box diagonal, so results are independent of the units used and
+  stable for inputs far from the origin (e.g. projected geographic coordinates).
 - Input rings are assumed simple (non-self-intersecting). Self-intersections and
   overlapping holes are not validated.
 - Runs in `O(n log n)` for `n` vertices: events are sorted once, and the active

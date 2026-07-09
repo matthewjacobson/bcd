@@ -5,4 +5,7 @@ export type {
   Polygon,
   FaceGraph,
   DecompositionResult,
+  DecomposeOptions,
+  Dcel,
+  HalfEdge,
 } from "./types.js";

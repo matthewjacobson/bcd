@@ -1,5 +1,6 @@
-import type { DecompositionResult, Point, Polygon } from "./types.js";
+import type { Dcel, DecomposeOptions, DecompositionResult, Point, Polygon } from "./types.js";
 import { rotatePoint, signedArea } from "./geometry.js";
+import { buildDcel } from "./dcel.js";
 import { StatusTree, type StatusNode } from "./status.js";
 
 /**
@@ -35,12 +36,16 @@ const CEIL = 1;
  */
 type AdjPair = [from: number, to: number, lo: number, hi: number];
 
-/** Faces whose absolute area is below this threshold are discarded as slivers. */
-const AREA_EPS = 1e-9;
-/** Shared seams shorter than this (rotated-frame length) are treated as a touch, not an edge. */
-const SEAM_EPS = 1e-7;
-/** Coordinate rounding used when merging coincident vertices. */
-const ROUND = 1e9;
+/**
+ * Tolerances, all relative to `span` (the diagonal of the input's bounding
+ * box), so behaviour is independent of the units and magnitude of the input.
+ */
+/** Faces whose absolute area is at most `span² · AREA_EPS_REL` are discarded as slivers. */
+const AREA_EPS_REL = 1e-12;
+/** Shared seams shorter than `span · SEAM_EPS_REL` are treated as a touch, not an edge. */
+const SEAM_EPS_REL = 1e-9;
+/** Quantum used when merging coincident vertices, as a fraction of `span`. */
+const QUANTUM_REL = 1e-9;
 
 /**
  * Compute the boustrophedon cellular decomposition of a polygon.
@@ -56,28 +61,68 @@ const ROUND = 1e9;
  * @param polygon Outer ring plus optional holes (any winding order).
  * @param angle Sweep direction in radians, measured counter-clockwise from the
  *   `+x` axis. The decomposition slices perpendicular to this direction.
+ * @param options Set `dcel: true` to also build a doubly connected edge list
+ *   (this inserts T-junction vertices into the face loops, see
+ *   {@link DecomposeOptions.dcel}).
  * @returns Vertices, faces (CCW vertex-index loops) and the face connectivity graph.
  */
-export function decompose(polygon: Polygon, angle: number): DecompositionResult {
-  if (!polygon || !Array.isArray(polygon.outer) || polygon.outer.length < 3) {
+export function decompose(
+  polygon: Polygon,
+  angle: number,
+  options?: DecomposeOptions,
+): DecompositionResult {
+  if (!polygon || !Array.isArray(polygon.outer)) {
     throw new Error("decompose: polygon.outer must contain at least 3 points");
   }
+
+  // Sanitize rings: drop consecutive duplicate points and a repeated closing
+  // point. A duplicated vertex would otherwise create a zero-length edge that
+  // corrupts the sweep's vertex classification.
+  const outerRing = stripDuplicatePoints(polygon.outer);
+  if (outerRing.length < 3) {
+    throw new Error("decompose: polygon.outer must contain at least 3 distinct points");
+  }
+  const holeRings: Point[][] = [];
+  for (const hole of polygon.holes ?? []) {
+    if (!Array.isArray(hole)) continue;
+    const h = stripDuplicatePoints(hole);
+    if (h.length >= 3) holeRings.push(h);
+  }
+
+  // Centre the polygon on its bounding box before rotating and scale every
+  // tolerance to the box diagonal, so results don't degrade for inputs far
+  // from the origin and don't depend on the units used.
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const ring of [outerRing, ...holeRings]) {
+    for (const p of ring) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+  }
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const span = Math.hypot(maxX - minX, maxY - minY);
 
   // Rotate by -angle so the sweep direction becomes +x; remember the inverse.
   const cosA = Math.cos(-angle);
   const sinA = Math.sin(-angle);
   const cosB = Math.cos(angle);
   const sinB = Math.sin(angle);
+  const rot = (p: Point): Point => rotatePoint({ x: p.x - cx, y: p.y - cy }, cosA, sinA);
 
   // Re-orient rings so the interior lies to the left of every directed edge:
   // outer counter-clockwise, holes clockwise.
   const rings: Point[][] = [];
-  const outer = polygon.outer.map((p) => rotatePoint(p, cosA, sinA));
+  const outer = outerRing.map(rot);
   if (signedArea(outer) < 0) outer.reverse();
   rings.push(outer);
-  for (const hole of polygon.holes ?? []) {
-    if (!Array.isArray(hole) || hole.length < 3) continue;
-    const h = hole.map((p) => rotatePoint(p, cosA, sinA));
+  for (const hole of holeRings) {
+    const h = hole.map(rot);
     if (signedArea(h) > 0) h.reverse();
     rings.push(h);
   }
@@ -276,16 +321,28 @@ export function decompose(polygon: Polygon, angle: number): DecompositionResult 
     }
   }
 
-  return assemble(rawFaces, adjPairs, cosB, sinB);
+  return assemble(rawFaces, adjPairs, cosB, sinB, cx, cy, span, options?.dcel === true);
 }
 
-/** Round to merge coincident coordinates. */
-function round(v: number): number {
-  return Math.round(v * ROUND) / ROUND;
+/** Strip consecutive duplicate points and a repeated closing point from a ring. */
+function stripDuplicatePoints(ring: Point[]): Point[] {
+  const out: Point[] = [];
+  for (const p of ring) {
+    const last = out[out.length - 1];
+    if (last && last.x === p.x && last.y === p.y) continue;
+    out.push(p);
+  }
+  while (out.length > 1) {
+    const a = out[0];
+    const b = out[out.length - 1];
+    if (a.x === b.x && a.y === b.y) out.pop();
+    else break;
+  }
+  return out;
 }
 
 /** Remove consecutive duplicate points and any closing duplicate. */
-function dedupRing(pts: Point[]): Point[] {
+function dedupRing(pts: Point[], round: (v: number) => number): Point[] {
   const out: Point[] = [];
   for (const p of pts) {
     const last = out[out.length - 1];
@@ -310,28 +367,46 @@ function assemble(
   adjPairs: Array<AdjPair>,
   cos: number,
   sin: number,
+  cx: number,
+  cy: number,
+  span: number,
+  withDcel: boolean,
 ): DecompositionResult {
+  const quantum = span * QUANTUM_REL;
+  const areaEps = span * span * AREA_EPS_REL;
+  const seamEps = span * SEAM_EPS_REL;
+  const round = (v: number): number => Math.round(v / quantum) * quantum;
+
   const uidToFace = new Map<number, number>();
   const faceRings: Point[][] = [];
   for (const rf of rawFaces) {
-    const ring = dedupRing(rf.pts);
+    const ring = dedupRing(rf.pts, round);
     if (ring.length < 3) continue;
-    if (Math.abs(signedArea(ring)) < AREA_EPS) continue;
+    if (Math.abs(signedArea(ring)) <= areaEps) continue;
     uidToFace.set(rf.uid, faceRings.length);
     faceRings.push(ring);
   }
 
   const vertices: Point[] = [];
   const vmap = new Map<string, number>();
-  const faces: number[][] = faceRings.map((ring) =>
+  // Rotated-frame (sweep-frame) coordinates per vertex id; internal seams are
+  // vertical in this frame, which the DCEL normalisation relies on.
+  const rpx: number[] = [];
+  const rpy: number[] = [];
+  let faces: number[][] = faceRings.map((ring) =>
     ring.map((pt) => {
+      // Key on the rotated-back but still centred coordinates: their magnitude
+      // is bounded by the span, so quantisation never loses precision even
+      // when the input sits far from the origin.
       const orig = rotatePoint(pt, cos, sin);
       const key = `${round(orig.x)}|${round(orig.y)}`;
       let id = vmap.get(key);
       if (id === undefined) {
         id = vertices.length;
         vmap.set(key, id);
-        vertices.push(orig);
+        vertices.push({ x: orig.x + cx, y: orig.y + cy });
+        rpx.push(pt.x);
+        rpy.push(pt.y);
       }
       return id;
     }),
@@ -380,7 +455,7 @@ function assemble(
     const visited = new Set<string>();
     while (stack.length) {
       const [w, lo, hi] = stack.pop() as [number, number, number];
-      if (hi - lo <= SEAM_EPS) continue; // seam pinched to nothing along this path
+      if (hi - lo <= seamEps) continue; // seam pinched to nothing along this path
       const key = `${w}|${round(lo)}|${round(hi)}`;
       if (visited.has(key)) continue;
       visited.add(key);
@@ -395,5 +470,14 @@ function assemble(
   }
   for (const list of adjacency) list.sort((x, y) => x - y);
 
-  return { vertices, faces, graph: { adjacency, edges } };
+  let dcel: Dcel | undefined;
+  if (withDcel) {
+    const built = buildDcel(faces, rpx, rpy, quantum);
+    faces = built.loops;
+    dcel = built.dcel;
+  }
+
+  const result: DecompositionResult = { vertices, faces, graph: { adjacency, edges } };
+  if (dcel) result.dcel = dcel;
+  return result;
 }
