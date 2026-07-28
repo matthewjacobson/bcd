@@ -1,7 +1,7 @@
 {
   "name": "@matthewjacobson/bcd",
-  "version": "0.2.1",
-  "description": "Boustrophedon cellular decomposition of polygons (with holes) along an arbitrary sweep angle.",
+  "version": "0.3.0",
+  "description": "Boustrophedon cellular decomposition of polygons (with holes), by a straight sweep line at any angle or a radial sweep expanding from a point.",
   "type": "module",
   "author": "Matthew Jacobson",
   "license": "MIT",
@@ -48,6 +48,7 @@
     "cellular-decomposition",
     "coverage-path-planning",
     "polygon",
+    "radial",
     "robotics",
     "computational-geometry"
   ],

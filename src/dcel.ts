@@ -110,15 +110,57 @@ export function buildDcel(
     return collapseLoop(out);
   });
 
-  // --- Step 2: half-edges. One per directed loop edge, then twins.
+  return {
+    loops: norm,
+    dcel: linkHalfEdges(
+      norm,
+      norm.map((_l, i) => i),
+      norm.length,
+      nV,
+      px,
+      py,
+    ),
+  };
+}
+
+/**
+ * Build the half-edge structure over a set of face loops that already share
+ * their edges exactly (no T-junctions left to resolve).
+ *
+ * Twin half-edges are created for every directed loop edge; unmatched edges get
+ * a boundary twin on face `-1`, and those are linked by angular order around
+ * their shared vertices, which yields one cycle for the outer boundary and one
+ * per hole.
+ *
+ * @param loops Vertex loops, counter-clockwise for a face's outer boundary and
+ *   clockwise for an inner one.
+ * @param loopFace Face index each loop belongs to. A face's first loop is its
+ *   outer boundary; any further loops are inner cycles, which is how an annular
+ *   radial cell is described.
+ * @param faceCount Number of faces.
+ * @param nV Number of vertices.
+ * @param px/py Vertex coordinates used only to order edges around a vertex, so
+ *   any frame with the same orientation will do.
+ */
+export function linkHalfEdges(
+  loops: number[][],
+  loopFace: number[],
+  faceCount: number,
+  nV: number,
+  px: number[],
+  py: number[],
+): Dcel {
   const halfEdges: HalfEdge[] = [];
-  const faceEdge: number[] = [];
+  const faceEdge: number[] = new Array(faceCount).fill(-1);
+  const faceInnerEdges: number[][] = Array.from({ length: faceCount }, () => []);
   const dir = new Map<string, number>();
-  for (let f = 0; f < norm.length; f++) {
-    const loop = norm[f];
+  for (let l = 0; l < loops.length; l++) {
+    const loop = loops[l];
+    const f = loopFace[l];
     const m = loop.length;
     const base = halfEdges.length;
-    faceEdge.push(base);
+    if (faceEdge[f] === -1) faceEdge[f] = base;
+    else faceInnerEdges[f].push(base);
     for (let i = 0; i < m; i++) {
       dir.set(`${loop[i]},${loop[(i + 1) % m]}`, base + i);
       halfEdges.push({
@@ -196,5 +238,7 @@ export function buildDcel(
     if (vertexEdge[halfEdges[h].origin] === -1) vertexEdge[halfEdges[h].origin] = h;
   }
 
-  return { loops: norm, dcel: { halfEdges, faceEdge, vertexEdge, boundaryCycles } };
+  const dcel: Dcel = { halfEdges, faceEdge, vertexEdge, boundaryCycles };
+  if (faceInnerEdges.some((l) => l.length > 0)) dcel.faceInnerEdges = faceInnerEdges;
+  return dcel;
 }

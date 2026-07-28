@@ -24,6 +24,19 @@ export interface StatusNode {
   height: number;
 }
 
+/**
+ * How an edge behaves between its endpoints. The default is a straight segment
+ * in the sweep frame; the radial decomposition supplies a polar implementation
+ * where an edge is the image of a Cartesian segment in `(r, θ)` coordinates and
+ * is therefore curved.
+ */
+export interface EdgeGeometry {
+  /** Height at which the edge with endpoints `ai`/`bi` crosses the sweep line at `x`. */
+  yAt(ai: number, bi: number, x: number): number;
+  /** Direction of that edge at `x`, oriented toward increasing `x` (only its sign matters). */
+  tangentAt(ai: number, bi: number, x: number): { dx: number; dy: number };
+}
+
 export class StatusTree<T extends StatusNode> {
   root: T | null = null;
   /** Current sweep-line position; comparisons evaluate edge heights here. */
@@ -32,14 +45,23 @@ export class StatusTree<T extends StatusNode> {
   constructor(
     private readonly vx: number[],
     private readonly vy: number[],
+    /** Optional curved-edge geometry; straight segments are assumed when absent. */
+    private readonly geom: EdgeGeometry | null = null,
   ) {}
 
   /** Height at which edge `e` crosses the vertical line at `sweepX`. */
   yOf(e: T): number {
+    if (this.geom) return this.geom.yAt(e.ai, e.bi, this.sweepX);
     const ax = this.vx[e.ai];
     const bx = this.vx[e.bi];
     if (ax === bx) return (this.vy[e.ai] + this.vy[e.bi]) / 2;
     return this.vy[e.ai] + ((this.vy[e.bi] - this.vy[e.ai]) * (this.sweepX - ax)) / (bx - ax);
+  }
+
+  /** Direction of edge `e` at `sweepX`, oriented toward increasing x. */
+  private tangentOf(e: T): { dx: number; dy: number } {
+    if (this.geom) return this.geom.tangentAt(e.ai, e.bi, this.sweepX);
+    return { dx: this.vx[e.bi] - this.vx[e.ai], dy: this.vy[e.bi] - this.vy[e.ai] };
   }
 
   /**
@@ -51,11 +73,9 @@ export class StatusTree<T extends StatusNode> {
     const yb = this.yOf(b);
     if (ya < yb) return -1;
     if (ya > yb) return 1;
-    const adx = this.vx[a.bi] - this.vx[a.ai];
-    const ady = this.vy[a.bi] - this.vy[a.ai];
-    const bdx = this.vx[b.bi] - this.vx[b.ai];
-    const bdy = this.vy[b.bi] - this.vy[b.ai];
-    const cross = adx * bdy - ady * bdx; // > 0 => b turns above a => a is lower
+    const ta = this.tangentOf(a);
+    const tb = this.tangentOf(b);
+    const cross = ta.dx * tb.dy - ta.dy * tb.dx; // > 0 => b turns above a => a is lower
     if (cross > 0) return -1;
     if (cross < 0) return 1;
     return 0;
@@ -185,6 +205,14 @@ export class StatusTree<T extends StatusNode> {
     z.right = null;
     z.parent = null;
     this.rebalanceUp(rebalanceAt);
+  }
+
+  /** Highest active edge, or `null` when the tree is empty. */
+  maxNode(): T | null {
+    let cur = this.root;
+    if (!cur) return null;
+    while (cur.right) cur = cur.right;
+    return cur;
   }
 
   /** Greatest active edge whose crossing height is strictly below `yKey`. */

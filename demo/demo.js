@@ -1,10 +1,15 @@
-import { decompose } from "../dist/index.js";
+import { decompose, decomposeRadial, tessellateRadialFace } from "../dist/index.js";
 
 const canvas = document.getElementById("view");
 const ctx = canvas.getContext("2d");
 
 const els = {
   polygon: document.getElementById("polygon"),
+  mode: document.getElementById("mode"),
+  angleGroup: document.getElementById("angle-group"),
+  centerGroup: document.getElementById("center-group"),
+  sweepLabel: document.getElementById("sweep-label"),
+  sig: document.getElementById("sig"),
   angle: document.getElementById("angle"),
   angleVal: document.getElementById("angle-val"),
   faces: document.getElementById("show-faces"),
@@ -20,6 +25,8 @@ const els = {
 
 let polygons = {}; // name -> { outer, holes }
 let current = null; // currently selected { outer, holes }
+let center = null; // radial sweep centre, in polygon coordinates
+let toWorld = null; // canvas -> polygon coordinates, set by the last render
 
 const toPts = (contour) => contour.map(([x, y]) => ({ x, y }));
 const rect = (x0, y0, x1, y1) => [
@@ -103,9 +110,11 @@ async function init() {
   for (const name of Object.keys(archive)) addOption(archiveGroup, name);
   els.polygon.appendChild(archiveGroup);
 
-  // Initialise from URL query (?polygon=&angle=&faces=&graph=&outline=&sweep=).
+  // Initialise from URL query
+  // (?polygon=&mode=&angle=&cx=&cy=&faces=&graph=&outline=&sweep=).
   const q = new URLSearchParams(location.search);
   els.polygon.value = polygons[q.get("polygon")] ? q.get("polygon") : "eberly-14";
+  els.mode.value = q.get("mode") === "radial" ? "radial" : "linear";
   if (q.has("angle")) els.angle.value = q.get("angle");
   const bool = (key, def) => (q.has(key) ? q.get(key) === "1" || q.get(key) === "true" : def);
   els.faces.checked = bool("faces", true);
@@ -113,30 +122,100 @@ async function init() {
   els.outline.checked = bool("outline", true);
   els.sweep.checked = bool("sweep", false);
   current = polygons[els.polygon.value];
+  center =
+    q.has("cx") && q.has("cy")
+      ? { x: Number(q.get("cx")), y: Number(q.get("cy")) }
+      : defaultCenter(current);
 
   const sync = () => {
+    const radial = els.mode.value === "radial";
+    els.angleGroup.hidden = radial;
+    els.centerGroup.hidden = !radial;
+    els.sweepLabel.textContent = radial ? "Sweep circles" : "Sweep lines";
+    els.sig.textContent = radial
+      ? "decomposeRadial(polygon, center)"
+      : "decompose(polygon, angle)";
+    canvas.style.cursor = radial ? "crosshair" : "default";
+
     const params = new URLSearchParams({
       polygon: els.polygon.value,
-      angle: els.angle.value,
+      mode: els.mode.value,
       faces: els.faces.checked ? 1 : 0,
       graph: els.graph.checked ? 1 : 0,
       outline: els.outline.checked ? 1 : 0,
       sweep: els.sweep.checked ? 1 : 0,
     });
+    if (radial) {
+      params.set("cx", round4(center.x));
+      params.set("cy", round4(center.y));
+    } else {
+      params.set("angle", els.angle.value);
+    }
     history.replaceState(null, "", `?${params}`);
     render();
   };
 
   els.polygon.addEventListener("change", () => {
     current = polygons[els.polygon.value];
+    center = defaultCenter(current);
     sync();
   });
+  els.mode.addEventListener("change", sync);
   els.angle.addEventListener("input", sync);
   for (const t of [els.faces, els.graph, els.outline, els.sweep]) {
     t.addEventListener("change", sync);
   }
+
+  // Drag the sweep centre around in radial mode.
+  let dragging = false;
+  const place = (event) => {
+    if (els.mode.value !== "radial" || !toWorld) return;
+    const box = canvas.getBoundingClientRect();
+    center = toWorld({ x: event.clientX - box.left, y: event.clientY - box.top });
+    sync();
+  };
+  canvas.addEventListener("pointerdown", (e) => {
+    if (els.mode.value !== "radial") return;
+    dragging = true;
+    canvas.setPointerCapture(e.pointerId);
+    place(e);
+  });
+  canvas.addEventListener("pointermove", (e) => dragging && place(e));
+  canvas.addEventListener("pointerup", (e) => {
+    dragging = false;
+    canvas.releasePointerCapture(e.pointerId);
+  });
+
   window.addEventListener("resize", render);
-  render();
+  sync();
+}
+
+const round4 = (v) => Math.round(v * 1e4) / 1e4;
+
+/**
+ * A starting sweep centre. The bounding-box centre is often in a hole or
+ * outside the polygon entirely, which is legal but a dull first impression, so
+ * prefer the centroid when it lands inside the region.
+ */
+function defaultCenter(polygon) {
+  const b = boundsOf(polygon);
+  const box = { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 };
+  const c = centroid(polygon.outer);
+  return pointInPolygon(c, polygon) ? c : box;
+}
+
+function pointInPolygon(p, polygon) {
+  let inside = false;
+  for (const ring of [polygon.outer, ...(polygon.holes ?? [])]) {
+    for (let i = 0, n = ring.length; i < n; i++) {
+      const a = ring[i];
+      const b = ring[(i + 1) % n];
+      if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) {
+        inside = !inside;
+      }
+    }
+  }
+  return inside;
 }
 
 /** Distinct, stable color per face via the golden-angle hue rotation. */
@@ -180,6 +259,7 @@ function boundsOf(polygon) {
 function render() {
   if (!current) return;
 
+  const radial = els.mode.value === "radial";
   const angleDeg = Number(els.angle.value);
   els.angleVal.textContent = `${angleDeg}°`;
   const angle = (angleDeg * Math.PI) / 180;
@@ -193,18 +273,6 @@ function render() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssW, cssH);
 
-  // Decompose (timed).
-  let result;
-  const t0 = performance.now();
-  try {
-    result = decompose(current, angle);
-    els.err.textContent = "";
-  } catch (e) {
-    els.err.textContent = String(e.message || e);
-    return;
-  }
-  const elapsed = performance.now() - t0;
-
   // Fit transform: preserve aspect ratio, flip Y (archive coords are y-down).
   const pad = 36;
   const b = boundsOf(current);
@@ -216,26 +284,59 @@ function render() {
   const sx = (p) => offX + (p.x - b.minX) * scale;
   const sy = (p) => cssH - (offY + (p.y - b.minY) * scale); // flip Y
   const S = (p) => ({ x: sx(p), y: sy(p) });
+  toWorld = (s) => ({
+    x: b.minX + (s.x - offX) / scale,
+    y: b.minY + (cssH - s.y - offY) / scale,
+  });
 
-  const faceRing = (f) => f.map((i) => result.vertices[i]);
+  // Decompose (timed).
+  let result;
+  const t0 = performance.now();
+  try {
+    result = radial ? decomposeRadial(current, center) : decompose(current, angle);
+    els.err.textContent = "";
+  } catch (e) {
+    els.err.textContent = String(e.message || e);
+    if (radial) drawCenter(S(center));
+    return;
+  }
+  const elapsed = performance.now() - t0;
 
-  // --- sweep lines (cut direction is perpendicular to the sweep direction) ---
+  // Cell outlines. The radial cells are bounded by arcs, so flatten them to
+  // within half a screen pixel; an annular cell also brings inner loops.
+  const arcTol = 0.5 / scale;
+  const cellLoops = (i) =>
+    radial
+      ? tessellateRadialFace(result, i, arcTol)
+      : [result.faces[i].map((v) => result.vertices[v])];
+
+  // --- sweep guides: parallel cut lines, or concentric cut circles ---
   if (els.sweep.checked) {
-    const cx = cssW / 2, cy = cssH / 2;
-    const diag = Math.hypot(cssW, cssH);
-    // Cut lines are perpendicular to the sweep angle. In screen space Y is
-    // flipped, so negate the angle to keep the on-screen direction intuitive.
-    const a = -angle;
-    const dir = { x: Math.cos(a), y: Math.sin(a) }; // sweep direction
-    const perp = { x: -dir.y, y: dir.x }; // along the cut lines
     ctx.strokeStyle = "#3a4255";
     ctx.lineWidth = 1;
-    for (let d = -diag; d <= diag; d += 26) {
-      const ox = cx + dir.x * d, oy = cy + dir.y * d;
-      ctx.beginPath();
-      ctx.moveTo(ox - perp.x * diag, oy - perp.y * diag);
-      ctx.lineTo(ox + perp.x * diag, oy + perp.y * diag);
-      ctx.stroke();
+    if (radial) {
+      const c = S(center);
+      const far = Math.hypot(cssW, cssH);
+      for (let r = 26; r <= far; r += 26) {
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    } else {
+      const cx = cssW / 2, cy = cssH / 2;
+      const diag = Math.hypot(cssW, cssH);
+      // Cut lines are perpendicular to the sweep angle. In screen space Y is
+      // flipped, so negate the angle to keep the on-screen direction intuitive.
+      const a = -angle;
+      const dir = { x: Math.cos(a), y: Math.sin(a) }; // sweep direction
+      const perp = { x: -dir.y, y: dir.x }; // along the cut lines
+      for (let d = -diag; d <= diag; d += 26) {
+        const ox = cx + dir.x * d, oy = cy + dir.y * d;
+        ctx.beginPath();
+        ctx.moveTo(ox - perp.x * diag, oy - perp.y * diag);
+        ctx.lineTo(ox + perp.x * diag, oy + perp.y * diag);
+        ctx.stroke();
+      }
     }
   }
 
@@ -243,15 +344,18 @@ function render() {
   if (els.faces.checked) {
     ctx.lineJoin = "round";
     for (let i = 0; i < result.faces.length; i++) {
-      const ring = faceRing(result.faces[i]);
+      const loops = cellLoops(i);
       ctx.beginPath();
-      ring.forEach((p, k) => {
-        const s = S(p);
-        k === 0 ? ctx.moveTo(s.x, s.y) : ctx.lineTo(s.x, s.y);
-      });
-      ctx.closePath();
+      for (const ring of loops) {
+        ring.forEach((p, k) => {
+          const s = S(p);
+          k === 0 ? ctx.moveTo(s.x, s.y) : ctx.lineTo(s.x, s.y);
+        });
+        ctx.closePath();
+      }
       ctx.fillStyle = faceColor(i, 0.55);
-      ctx.fill();
+      // An annular cell's inner loop is a hole, not a second body.
+      ctx.fill("evenodd");
       ctx.strokeStyle = faceColor(i, 0.95);
       ctx.lineWidth = 1;
       ctx.stroke();
@@ -278,7 +382,7 @@ function render() {
 
   // --- connectivity graph ---
   if (els.graph.checked) {
-    const centers = result.faces.map((f) => S(centroid(faceRing(f))));
+    const centers = result.faces.map((_f, i) => S(centroid(cellLoops(i)[0])));
     ctx.strokeStyle = "rgba(255,209,102,0.85)";
     ctx.lineWidth = 1.8;
     for (const [a, c] of result.graph.edges) {
@@ -298,14 +402,32 @@ function render() {
     }
   }
 
-  // --- sweep direction indicator (bottom-right) ---
-  drawSweepArrow(cssW - 54, cssH - 54, 22, -angle);
+  // --- sweep indicator: the direction, or the centre it grows from ---
+  if (radial) drawCenter(S(center));
+  else drawSweepArrow(cssW - 54, cssH - 54, 22, -angle);
 
   // --- stats ---
   els.nFaces.textContent = result.faces.length;
   els.nVerts.textContent = result.vertices.length;
   els.nEdges.textContent = result.graph.edges.length;
   els.nTime.textContent = `${elapsed.toFixed(elapsed < 10 ? 2 : 1)} ms`;
+}
+
+/** Crosshair marking the radial sweep centre. */
+function drawCenter(p) {
+  ctx.save();
+  ctx.strokeStyle = "rgba(93,177,255,0.95)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(p.x - 12, p.y);
+  ctx.lineTo(p.x + 12, p.y);
+  ctx.moveTo(p.x, p.y - 12);
+  ctx.lineTo(p.x, p.y + 12);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawSweepArrow(cx, cy, r, a) {

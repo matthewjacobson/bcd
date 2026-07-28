@@ -62,8 +62,14 @@ export interface HalfEdge {
 export interface Dcel {
   /** All half-edges. Twins are `halfEdges[h].twin`; boundary half-edges have `face === -1`. */
   halfEdges: HalfEdge[];
-  /** For each face `i`, one half-edge on its counter-clockwise boundary cycle. */
+  /** For each face `i`, one half-edge on its counter-clockwise outer boundary cycle. */
   faceEdge: number[];
+  /**
+   * For each face, one half-edge per *inner* boundary cycle, clockwise. Only
+   * present when some face has one — that is, for a {@link decomposeRadial}
+   * result containing an annular cell. Faces without inner cycles have `[]`.
+   */
+  faceInnerEdges?: number[][];
   /** For each vertex, one half-edge leaving it (`-1` if the vertex is unused). */
   vertexEdge: number[];
   /**
@@ -71,6 +77,107 @@ export interface Dcel {
    * plus one cycle per hole.
    */
   boundaryCycles: number[];
+}
+
+/**
+ * A cell of a {@link decomposeRadial} decomposition.
+ *
+ * Most cells are a single loop, exactly like a linear decomposition's face.
+ * A cell that wraps the whole way around the sweep centre is an annulus, and
+ * an annulus needs two boundary circles — hence the optional inner loops.
+ */
+export interface RadialFace {
+  /** Outer boundary loop, counter-clockwise, indices into the vertex list. */
+  ring: number[];
+  /**
+   * Inner boundary loops, clockwise. Present only for annular cells (a band
+   * that encircles the centre); absent for every other cell.
+   */
+  holes?: number[][];
+}
+
+/**
+ * A circular boundary edge of a radial cell, centred on the sweep centre.
+ *
+ * Radial cuts are arcs, not straight lines, so the loops in {@link RadialFace}
+ * are exact only if you know which of their edges bulge. Each arc names the
+ * loop edge it replaces: the edge leaving position {@link RadialArc.index} of
+ * the loop. Every other loop edge is an ordinary straight segment.
+ */
+export interface RadialArc {
+  /** Index into {@link RadialDecompositionResult.faces}. */
+  face: number;
+  /** `-1` for that face's outer `ring`, otherwise the index into its `holes`. */
+  hole: number;
+  /** Position within the loop of the vertex the arc leaves. */
+  index: number;
+  /**
+   * How many consecutive loop edges the arc spans, starting at
+   * {@link RadialArc.index} and wrapping. Normally `1`; larger when the arc has
+   * been tessellated into the loop (which `dcel: true` does), in which case the
+   * intervening vertices lie exactly on the arc.
+   */
+  count: number;
+  /** Distance from the sweep centre (constant along the arc). */
+  radius: number;
+  /** Angle of the arc's start vertex, radians CCW from `+x`, in `(-π, π]`. */
+  startAngle: number;
+  /**
+   * Signed angle swept from `startAngle` to the arc's end, counter-clockwise
+   * positive. A point at parameter `t ∈ [0, 1]` sits at
+   * `startAngle + t · sweep`. `±2π` for a full circle, in which case the arc
+   * starts and ends at the same vertex and its loop has length 1.
+   */
+  sweep: number;
+}
+
+/** Options for {@link decomposeRadial}. */
+export interface RadialOptions {
+  /**
+   * Build a {@link Dcel} over the decomposition. Arcs are tessellated first
+   * (see {@link RadialOptions.arcTolerance}) so that every face loop is an
+   * ordinary polygon; the arc metadata still describes the exact circles.
+   */
+  dcel?: boolean;
+  /**
+   * Direction of the ray along which the polar frame is cut, radians CCW from
+   * `+x`. Defaults to a ray that misses the polygon entirely when one exists,
+   * otherwise the middle of the widest gap between the angles of the vertices
+   * and of the edges' closest approaches.
+   *
+   * The sweep steps across the cut, so this does **not** affect the
+   * decomposition — same cells, same graph, same areas whatever it is set to.
+   * It is exposed for reproducibility, and reported back as
+   * {@link RadialDecompositionResult.branchAngle}. A value landing on a vertex
+   * or a tangency is nudged aside, since those cannot be cut through.
+   */
+  branchAngle?: number;
+  /**
+   * Maximum distance between an arc and the polyline standing in for it when
+   * {@link RadialOptions.dcel} tessellates the loops. Defaults to `1/1000` of
+   * the scale — the larger of the bounding-box diagonal and the distance from
+   * the centre to the farthest vertex. Ignored without `dcel`, since arcs are
+   * otherwise reported exactly.
+   */
+  arcTolerance?: number;
+}
+
+/** Result of {@link decomposeRadial}. */
+export interface RadialDecompositionResult {
+  /** The sweep centre the decomposition was computed about. */
+  center: Point;
+  /** The branch angle actually used (see {@link RadialOptions.branchAngle}). */
+  branchAngle: number;
+  /** Unique vertices referenced by the faces, in the original coordinate frame. */
+  vertices: Point[];
+  /** Cells of the decomposition, each an outer loop plus optional inner loops. */
+  faces: RadialFace[];
+  /** The circular edges of those loops; every unlisted loop edge is straight. */
+  arcs: RadialArc[];
+  /** Connectivity graph describing which cells are adjacent. */
+  graph: FaceGraph;
+  /** Doubly connected edge list; present when requested via {@link RadialOptions.dcel}. */
+  dcel?: Dcel;
 }
 
 /** Options for {@link decompose}. */
